@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "onemace",
+  "version": "1.03-beta",
+  "name": "OneMace",
+  "description": "Only one mace may exist at a time. Converted from Paper plugin.",
+  "authors": ["mattwhyy"],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "net.mattwhyy.onemace.OneMace"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.17.2",
+    "fabric-api": "*",
+    "minecraft": "1.21.8"
+  }
+}
