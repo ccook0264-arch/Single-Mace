@@ -1,10 +1,10 @@
 plugins {
-    id 'fabric-loom' version '1.11-SNAPSHOT'
+    id 'fabric-loom' version "${loom_version}"
     id 'java'
 }
 
-group = 'net.mattwhyy'
-version = '1.0.3-beta'
+group = project.maven_group
+version = project.mod_version
 
 repositories {
     mavenCentral()
@@ -16,7 +16,7 @@ dependencies {
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    // Fabric API. This is technically optional, but you probably want it anyway.
+    // Fabric API (only if needed)
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
