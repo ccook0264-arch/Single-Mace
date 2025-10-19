@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "singlemace",
-  "version": "1.21.9",
+  "version": "1.21.10",
   "name": "SingleMace",
   "description": "Only one mace may exist at a time. Converted from Paper plugin.",
   "authors": ["mattwhyy"],
@@ -15,6 +15,6 @@
   "depends": {
     "fabricloader": ">=0.17.2",
     "fabric-api": "*",
-    "minecraft": "1.21.9"
+    "minecraft": "1.21.10"
   }
 }
