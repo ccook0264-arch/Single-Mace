@@ -63,11 +63,11 @@ public final class OneMaceCommand {
             }
         }
 
-        // If not found, just report UUIDs from offline cache
+        // If not found, check offline data
         if (!OneMace.offlineInventory.isEmpty()) {
             for (UUID uuid : OneMace.offlineInventory.keySet()) {
                 if (Boolean.TRUE.equals(OneMace.offlineInventory.get(uuid))) {
-                    src.sendFeedback(() -> Text.literal("§eThe Mace is in offline player with UUID §b" + uuid + "§e."), false);
+                    src.sendFeedback(() -> Text.literal("§eThe Mace is held by an offline player with UUID §b" + uuid + "§e."), false);
                     return 1;
                 }
             }
@@ -96,7 +96,6 @@ public final class OneMaceCommand {
             OneMace.maceCrafted = false;
             OneMace.maceOwner = null;
             OneMace.offlineInventory.clear();
-            OneMace.saveConfig();
             src.sendFeedback(() -> Text.literal("§aNo maces found among online players. Crafting is unlocked."), false);
             return 1;
         }
@@ -115,7 +114,6 @@ public final class OneMaceCommand {
         OneMace.maceCrafted = true;
         ServerPlayerEntity owner = findHolder(server);
         OneMace.maceOwner = owner != null ? owner.getUuid() : null;
-        OneMace.saveConfig();
 
         final int removedCount = removed;
         src.sendFeedback(() -> Text.literal("§aFixed. Kept one mace, removed §c" + removedCount + " §aduplicate(s)."), false);
