@@ -7,8 +7,9 @@ import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 
+import net.minecraft.block.AnvilBlock;
 import net.minecraft.block.entity.BlockEntity;
-import net.minecraft.entity.Entity;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
@@ -16,21 +17,20 @@ import net.minecraft.inventory.CraftingResultInventory;
 import net.minecraft.inventory.Inventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.screen.AnvilScreenHandler;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.sound.SoundCategory;
-import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.WorldSavePath;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 
 import java.io.File;
 import java.io.FileReader;
@@ -41,16 +41,14 @@ import java.util.concurrent.ConcurrentHashMap;
 public class OneMace implements ModInitializer {
 
     public static final String MOD_ID = "onemace";
-    public static final Identifier MACE_RECIPE_ID = Identifier.of("minecraft", "mace");
+    private static final String OFFLINE_FILE_NAME = "onemace_offline.properties";
+    private static final int SCAN_INTERVAL_TICKS = 40; // 2 seconds @ 20 TPS
 
     public static boolean maceCrafted = false;
     public static UUID maceOwner = null;
     public static final Map<UUID, Boolean> offlineInventory = new ConcurrentHashMap<>();
 
-    private static final String OFFLINE_FILE_NAME = "onemace_offline.properties";
-
-    private static final int SCAN_INTERVAL_TICKS = 20;
-    private static int tickGuard = 0;
+    private int tickCounter = 0;
 
     @Override
     public void onInitialize() {
@@ -60,58 +58,65 @@ public class OneMace implements ModInitializer {
         ServerLifecycleEvents.SERVER_STOPPING.register(this::saveOfflineData);
 
         ServerTickEvents.END_SERVER_TICK.register(server -> {
+            if (server.getPlayerManager() == null || server.getPlayerManager().getPlayerList().isEmpty()) return;
             blockCraftResults(server);
             yankFromOpenContainers(server);
-            enforceOneMaceLight(server);
+            enforceOneMace(server);
         });
 
-        ServerPlayConnectionEvents.DISCONNECT.register((h, server) -> {
-            ServerPlayerEntity p = h.player;
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            ServerPlayerEntity p = handler.player;
             offlineInventory.put(p.getUuid(), hasMaceAnywhere(p));
         });
-        ServerPlayConnectionEvents.JOIN.register((h, sender, server) -> {
-            ServerPlayerEntity p = h.player;
+
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            ServerPlayerEntity p = handler.player;
             offlineInventory.remove(p.getUuid());
-            if (!anyMaceInPlayersOrOffline(server)) {
-                resetMaceCrafting(server, false);
-            } else {
-                maceCrafted = true;
-            }
+            if (!anyMaceExists(server)) resetMaceCrafting(server, false);
+            else maceCrafted = true;
         });
 
-        UseEntityCallback.EVENT.register((player, world, hand, entity, hit) -> onUseEntity(player, world, hand, entity, hit));
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hit) -> onUseEntity(player, world, hand, entity));
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> onUseBlock(player, world, hand, hit));
     }
 
-    private static ActionResult onUseEntity(PlayerEntity player, net.minecraft.world.World world, Hand hand, Entity entity, EntityHitResult hit) {
+    // Prevent placing the mace into item frames
+    private static ActionResult onUseEntity(PlayerEntity player, net.minecraft.world.World world, Hand hand, net.minecraft.entity.Entity entity) {
         if (world.isClient()) return ActionResult.PASS;
-        if (isMace(player.getMainHandStack()) || isMace(player.getOffHandStack())) {
-            if (entity instanceof ItemFrameEntity) return ActionResult.FAIL;
+        if ((isMace(player.getMainHandStack()) || isMace(player.getOffHandStack()))
+                && entity instanceof ItemFrameEntity) {
+            return ActionResult.FAIL;
         }
         return ActionResult.PASS;
     }
 
+    // Allow anvils, block other containers
     private static ActionResult onUseBlock(PlayerEntity player, net.minecraft.world.World world, Hand hand, BlockHitResult hit) {
         if (world.isClient()) return ActionResult.PASS;
-        if (!(isMace(player.getMainHandStack()) || isMace(player.getOffHandStack()))) return ActionResult.PASS;
 
-        BlockPos pos = hit.getBlockPos();
-        BlockEntity be = world.getBlockEntity(pos);
+        ItemStack heldMain = player.getMainHandStack();
+        ItemStack heldOff = player.getOffHandStack();
+        if (!isMace(heldMain) && !isMace(heldOff)) return ActionResult.PASS;
+
+        BlockEntity be = world.getBlockEntity(hit.getBlockPos());
+        if (world.getBlockState(hit.getBlockPos()).getBlock() instanceof AnvilBlock) return ActionResult.PASS;
         if (be instanceof Inventory) return ActionResult.FAIL;
+
         return ActionResult.PASS;
     }
 
+    // Remove mace from non-anvil inventories
     private static void yankFromOpenContainers(MinecraftServer server) {
         for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
             ScreenHandler open = p.currentScreenHandler;
             if (open == null || open == p.playerScreenHandler) continue;
+            if (open instanceof AnvilScreenHandler) continue;
 
             try {
                 for (Slot slot : open.slots) {
                     boolean isPlayerInv = slot.inventory == p.getInventory();
                     boolean isEnder = slot.inventory == p.getEnderChestInventory();
                     if (isPlayerInv || isEnder) continue;
-
                     if (slot.inventory instanceof CraftingResultInventory) continue;
 
                     ItemStack s = slot.getStack();
@@ -119,25 +124,23 @@ public class OneMace implements ModInitializer {
                         ItemStack copy = s.copy();
                         slot.setStack(ItemStack.EMPTY);
                         slot.markDirty();
-
-                        if (!p.getInventory().insertStack(copy)) {
-                            p.dropItem(copy, false);
-                        }
-                        p.playSound(SoundEvents.BLOCK_NOTE_BLOCK_PLING.value(), 0.8f, 1.6f);
+                        if (!p.getInventory().insertStack(copy)) p.dropItem(copy, false);
+                        // Play pling sound when returning item
+                        p.playSound(SoundEvents.BLOCK_NOTE_BLOCK_HARP.value(), 1.0f, 1.0f);
                     }
                 }
             } catch (Throwable ignored) {}
         }
     }
 
+    // Prevent crafting another mace if one exists
     private static void blockCraftResults(MinecraftServer server) {
-        boolean locked = anyMaceInPlayersOrOffline(server);
+        boolean locked = anyMaceExists(server);
         if (!locked) return;
 
         for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
             ScreenHandler open = p.currentScreenHandler;
             if (open == null) continue;
-
             try {
                 for (Slot slot : open.slots) {
                     if (slot.inventory instanceof CraftingResultInventory) {
@@ -154,143 +157,100 @@ public class OneMace implements ModInitializer {
         }
     }
 
-    private static void enforceOneMaceLight(MinecraftServer server) {
-        if (++tickGuard % SCAN_INTERVAL_TICKS != 0) return;
+    // Track mace existence
+    private void enforceOneMace(MinecraftServer server) {
+        if (++tickCounter % SCAN_INTERVAL_TICKS != 0) return;
 
         boolean found = false;
-        UUID foundOwner = null;
-        boolean announcedDuplicateThisPass = false;
-
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            PlayerInventory inv = player.getInventory();
+            if (hasMaceAnywhere(player)) { found = true; break; }
+        }
 
-            for (int i = 0; i < inv.size(); i++) {
-                ItemStack s = inv.getStack(i);
-                if (isMace(s)) {
-                    if (!found) {
-                        found = true;
-                        foundOwner = player.getUuid();
-                    } else {
-                        s.setCount(0);
-                        if (!announcedDuplicateThisPass) {
-                            announcedDuplicateThisPass = true;
-                            announceAndSound(server, "A Mace has already been crafted!", SoundEvents.BLOCK_ANVIL_LAND);
-                        }
-                        refundRecipeMaterials(player);
-                    }
-                }
-            }
-            for (int i = 0; i < player.getEnderChestInventory().size(); i++) {
-                ItemStack s = player.getEnderChestInventory().getStack(i);
-                if (isMace(s)) {
-                    if (!found) {
-                        found = true;
-                        foundOwner = player.getUuid();
-                    } else {
-                        s.setCount(0);
-                        if (!announcedDuplicateThisPass) {
-                            announcedDuplicateThisPass = true;
-                            announceAndSound(server, "A Mace has already been crafted!", SoundEvents.BLOCK_ANVIL_LAND);
-                        }
-                        refundRecipeMaterials(player);
-                    }
-                }
+        if (!found) {
+            for (var world : server.getWorlds()) {
+                // Big bounding box for searching dropped items
+                Box worldBox = new Box(-30000, -64, -30000, 30000, 320, 30000);
+                List<ItemEntity> maces = world.getEntitiesByClass(ItemEntity.class, worldBox,
+                        e -> isMace(e.getStack()));
+                if (!maces.isEmpty()) { found = true; break; }
             }
         }
 
-        boolean offlineHas = offlineInventory.values().stream().anyMatch(Boolean::booleanValue);
-        if (!found && !offlineHas) {
+        if (!found && offlineInventory.values().stream().noneMatch(Boolean::booleanValue)) {
             if (maceCrafted) resetMaceCrafting(server, true);
-            return;
-        }
-
-        if (found) {
-            maceCrafted = true;
-            if (foundOwner != null) maceOwner = foundOwner;
-        }
+        } else maceCrafted = true;
     }
 
-    public static boolean isMace(ItemStack stack) {
-        return stack != null && stack.isOf(Items.MACE) && stack.getCount() > 0;
+    public static boolean isMace(ItemStack s) {
+        return s != null && s.isOf(Items.MACE) && s.getCount() > 0;
     }
 
     private static boolean hasMaceAnywhere(ServerPlayerEntity p) {
-        for (int i = 0; i < p.getInventory().size(); i++)
-            if (isMace(p.getInventory().getStack(i))) return true;
+        PlayerInventory inv = p.getInventory();
+        for (int i = 0; i < inv.size(); i++) if (isMace(inv.getStack(i))) return true;
         for (int i = 0; i < p.getEnderChestInventory().size(); i++)
             if (isMace(p.getEnderChestInventory().getStack(i))) return true;
         return false;
     }
 
-    private static boolean anyMaceInPlayersOrOffline(MinecraftServer server) {
-        for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
-            for (int i = 0; i < p.getInventory().size(); i++)
-                if (p.getInventory().getStack(i).isOf(Items.MACE)) return true;
-            for (int i = 0; i < p.getEnderChestInventory().size(); i++)
-                if (p.getEnderChestInventory().getStack(i).isOf(Items.MACE)) return true;
-        }
+    private static boolean anyMaceExists(MinecraftServer server) {
+        for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList())
+            if (hasMaceAnywhere(p)) return true;
         return offlineInventory.values().stream().anyMatch(Boolean::booleanValue);
     }
 
-    private static void refundRecipeMaterials(ServerPlayerEntity player) {
-        ItemStack core = new ItemStack(Items.HEAVY_CORE);
-        ItemStack rod = new ItemStack(Items.BREEZE_ROD);
-        if (!player.getInventory().insertStack(core)) player.dropItem(core, false);
-        if (!player.getInventory().insertStack(rod)) player.dropItem(rod, false);
-        player.playSound(SoundEvents.UI_BUTTON_CLICK.value(), 0.7f, 1.8f);
+    private static void announce(MinecraftServer server, String msg) {
+        if (server.getPlayerManager() != null)
+            server.getPlayerManager().broadcast(Text.literal("§e" + msg), false);
     }
 
-    private static void announceAndSound(MinecraftServer server, String msg, SoundEvent sound) {
-        server.getPlayerManager().broadcast(Text.literal("§e" + msg), false);
-        // Loop through all dimensions
-        for (net.minecraft.server.world.ServerWorld world : server.getWorlds()) {
-            for (ServerPlayerEntity p : world.getPlayers()) {
-                world.playSound(null, p.getBlockPos(), sound, SoundCategory.PLAYERS, 1.0f, 1.0f);
-            }
-        }
-    }
-
+    // ✅ Combined logic: plays global sound like 1.21.8 version but in modern readable mappings
     public static void resetMaceCrafting(MinecraftServer server, boolean announce) {
         maceCrafted = false;
         maceOwner = null;
         offlineInventory.clear();
+
         if (announce) {
-            announceAndSound(server, "The Mace has been lost! Crafting is re-enabled.", SoundEvents.ENTITY_LIGHTNING_BOLT_THUNDER);
+            announce(server, "§eThe Mace has been destroyed! Crafting is re-enabled.");
+
+            // Play the loud lightning thunder sound globally in every world
+            for (var world : server.getWorlds()) {
+                for (ServerPlayerEntity player : world.getPlayers()) {
+                    world.playSound(
+                            null, // null = broadcast to all nearby players
+                            player.getX(), player.getY(), player.getZ(),
+                            SoundEvents.ENTITY_LIGHTNING_BOLT_THUNDER, // ⚡ loud thunder sound
+                            SoundCategory.WEATHER,
+                            20.0f,  // 🔊 very loud
+                            1.0f   // normal pitch
+                    );
+                }
+            }
         }
     }
 
+
     private void loadOfflineData(MinecraftServer server) {
         try {
-            File file = server.getSavePath(WorldSavePath.ROOT).resolve(OFFLINE_FILE_NAME).toFile();
-            if (!file.exists()) return;
-            Properties props = new Properties();
-            try (FileReader reader = new FileReader(file)) {
-                props.load(reader);
-            }
+            File f = server.getSavePath(WorldSavePath.ROOT).resolve(OFFLINE_FILE_NAME).toFile();
+            if (!f.exists()) return;
+            Properties p = new Properties();
+            try (FileReader r = new FileReader(f)) { p.load(r); }
             offlineInventory.clear();
-            for (String k : props.stringPropertyNames()) {
-                boolean val = Boolean.parseBoolean(props.getProperty(k, "false"));
-                offlineInventory.put(UUID.fromString(k), val);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            for (String k : p.stringPropertyNames())
+                offlineInventory.put(UUID.fromString(k), Boolean.parseBoolean(p.getProperty(k, "false")));
+        } catch (Exception e) { e.printStackTrace(); }
     }
 
     private void saveOfflineData(MinecraftServer server) {
         try {
-            File file = server.getSavePath(WorldSavePath.ROOT).resolve(OFFLINE_FILE_NAME).toFile();
-            Properties props = new Properties();
-            for (Map.Entry<UUID, Boolean> e : offlineInventory.entrySet()) {
-                props.setProperty(e.getKey().toString(), Boolean.toString(e.getValue()));
-            }
-            try (FileWriter writer = new FileWriter(file)) {
-                props.store(writer, "OneMace offline holder flags");
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            File f = server.getSavePath(WorldSavePath.ROOT).resolve(OFFLINE_FILE_NAME).toFile();
+            Properties p = new Properties();
+            for (var e : offlineInventory.entrySet())
+                p.setProperty(e.getKey().toString(), Boolean.toString(e.getValue()));
+            try (FileWriter w = new FileWriter(f)) { p.store(w, "OneMace offline data"); }
+        } catch (Exception e) { e.printStackTrace(); }
     }
 
-    public static void saveConfig() {}
+    public static void saveConfig() {} // stub for OneMaceCommand
 }
