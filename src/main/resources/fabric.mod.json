@@ -1,20 +1,23 @@
 {
   "schemaVersion": 1,
-  "id": "singlemace",
-  "version": "1.21.10",
-  "name": "SingleMace",
-  "description": "Only one mace may exist at a time. Converted from Paper plugin.",
-  "authors": ["mattwhyy"],
-  "license": "MIT",
-  "environment": "server",
+  "id": "single-mace",
+  "version": "${version}",
+  "name": "Single Mace",
+  "description": "Limits each player to crafting one mace and restricts mace storage.",
+  "icon": "assets/single-mace/icon.png",
+  "environment": "*",
   "entrypoints": {
     "main": [
-      "net.mattwhyy.onemace.OneMace"
+      "com.example.SingleMace"
     ]
   },
+  "mixins": [
+    "single-mace.mixins.json"
+  ],
   "depends": {
-    "fabricloader": ">=0.17.2",
-    "fabric-api": "*",
-    "minecraft": "1.21.10"
+    "fabricloader": ">=0.19.5",
+    "minecraft": ">=26.3 <26.4",
+    "java": ">=25",
+    "fabric-api": "*"
   }
 }
